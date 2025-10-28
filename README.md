@@ -25,7 +25,7 @@ ORBIt aims to provide:
 ## Quick start example
 
 ``` python
-from orbit.regression import ORBITRegressor, ORBITBaggedRegressor
+from orbit.model.regression import ORBITRegressor, ORBITBaggedRegressor
 from sklearn.datasets import make_friedman1
 from sklearn.metrics import mean_absolute_error, r2_score, PredictionErrorDisplay
 import numpy as np, matplotlib.pyplot as plt, shap
@@ -79,7 +79,7 @@ PredictionErrorDisplay.from_estimator(orbit, Xte, yte, kind="residual_vs_predict
 plt.show()
 
 # 7) SHAP-based explanations
-from orbit.explain import shap_callables, beeswarm_one
+from orbit.model.explain import shap_callables, beeswarm_one
 f_full, f_lin, f_nl = shap_callables(orbit)
 mask = shap.maskers.Independent(shap.sample(Xtr, 1000))
 expl_full = shap.Explainer(f_full, mask, feature_names=[f"x{i}" for i in range(X_df.shape[1])])
