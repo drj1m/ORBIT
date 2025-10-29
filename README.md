@@ -11,7 +11,7 @@ ORBIt aims to provide:
 
 ## Key features 
 
-- Linear head: Sparse ElasticNet on standardized raw features
+- Linear head: Sparse ElasticNet on standardised raw features
 - Nonlinear head: ElasticNet over a screened, whitened feature bank
 - Feature bank: Combines wavelet-denoised univariate bases, pair/triple interactions, RFFs, and local atom features
 - Screening + Whitening: Two-stage cosine correlation screening with Cholesky whitening for stability
