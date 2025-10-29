@@ -1,7 +1,8 @@
-import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.inspection import permutation_importance
+import numpy as np
 import shap
+from sklearn.inspection import permutation_importance
+
 
 def shap_callables(orbit):
     """
@@ -18,15 +19,16 @@ def shap_callables(orbit):
         Functions mapping X → predictions for the full model,
         the linear head, and the nonlinear bank head (on target scale).
     """
-    
+
     f_full = lambda X: orbit.predict(np.asarray(X, float))
-    f_lin  = lambda X: orbit.predict_components(np.asarray(X, float),
-                                                on_target_scale=True,
-                                                include_stack=False)["y_lin"]
-    f_nl   = lambda X: orbit.predict_components(np.asarray(X, float),
-                                                on_target_scale=True,
-                                                include_stack=False)["y_nl"]
+    f_lin = lambda X: orbit.predict_components(
+        np.asarray(X, float), on_target_scale=True, include_stack=False
+    )["y_lin"]
+    f_nl = lambda X: orbit.predict_components(
+        np.asarray(X, float), on_target_scale=True, include_stack=False
+    )["y_nl"]
     return f_full, f_lin, f_nl
+
 
 def beeswarm_one(sv, title, width=6, height=4):
     """
@@ -75,11 +77,19 @@ def perm_importance_callable(f, X, y, n_repeats=10, random_state=42):
     sklearn.inspection._PermutationImportance
         Result object with importances and per-feature statistics.
     """
+
     class _F:
-        def __init__(self, f): self.f = f
-        def fit(self, X, y): return self
-        def predict(self, X): return self.f(X)
+        def __init__(self, f):
+            self.f = f
+
+        def fit(self, X, y):
+            return self
+
+        def predict(self, X):
+            return self.f(X)
+
     est = _F(f).fit(None, None)
-    r = permutation_importance(est, X, y, n_repeats=n_repeats,
-                               random_state=random_state, n_jobs=-1)
+    r = permutation_importance(
+        est, X, y, n_repeats=n_repeats, random_state=random_state, n_jobs=-1
+    )
     return r

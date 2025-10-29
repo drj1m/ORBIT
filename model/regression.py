@@ -14,44 +14,25 @@ bank dropout, optional Huber-ridge refit, ridge stacker, and split
 conformal PIs).
 """
 
-
-import sys, time, warnings, math
-import numpy as np
-import pandas as pd
-
-from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, PowerTransformer
-from sklearn.feature_selection import mutual_info_regression
-from sklearn.linear_model import Ridge, ElasticNetCV, HuberRegressor
-from sklearn.datasets import load_diabetes, fetch_california_housing, make_friedman1, make_regression
-
-from sklearn.svm import SVR
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.kernel_ridge import KernelRidge
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import (
-    RandomForestRegressor, ExtraTreesRegressor, GradientBoostingRegressor,
-    AdaBoostRegressor, HistGradientBoostingRegressor
-)
-from sklearn.neural_network import MLPRegressor
-import numpy as np
-from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.preprocessing import StandardScaler, PowerTransformer
-from sklearn.linear_model import ElasticNetCV, Ridge
-
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.inspection import permutation_importance
+from sklearn.linear_model import ElasticNetCV, HuberRegressor, Ridge
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.preprocessing import PowerTransformer, StandardScaler
 
 
 # Optional wavelets
 try:
     import pywt
+
     HAS_PYWT = True
 except Exception:
     HAS_PYWT = False
+
 
 # ---------- utils ----------
 def rmse(y_true, y_pred):
@@ -70,11 +51,15 @@ def rmse(y_true, y_pred):
     float
         RMSE over finite entries only.
     """
-    yt = np.asarray(y_true).ravel(); yp = np.asarray(y_pred).ravel()
+    yt = np.asarray(y_true).ravel()
+    yp = np.asarray(y_pred).ravel()
     mask = np.isfinite(yt) & np.isfinite(yp)
-    if mask.sum() == 0: return np.inf
-    yt = yt[mask]; yp = yp[mask]
+    if mask.sum() == 0:
+        return np.inf
+    yt = yt[mask]
+    yp = yp[mask]
     return float(np.sqrt(np.mean((yt - yp) ** 2)))
+
 
 def nrmse(y_true, y_pred):
     """
@@ -95,6 +80,7 @@ def nrmse(y_true, y_pred):
     v = rmse(y_true, y_pred) / s
     return float(v)
 
+
 def safe_nan_to_num(A):
     """
     Replace non-finite values with zeros (float).
@@ -112,6 +98,7 @@ def safe_nan_to_num(A):
     A = np.asarray(A, float)
     A = np.where(np.isfinite(A), A, 0.0)
     return A
+
 
 def temporal_split(X, y, test_size=0.25, min_train=50):
     """
@@ -139,6 +126,7 @@ def temporal_split(X, y, test_size=0.25, min_train=50):
     n_train = min(n_train, n - 1)
     return X[:n_train], X[n_train:], y[:n_train], y[n_train:]
 
+
 def safe_metrics(ytrue, ypred, PI=None):
     """
     Convenience metrics (MAE, RMSE, NRMSE, R²) computed safely.
@@ -157,8 +145,10 @@ def safe_metrics(ytrue, ypred, PI=None):
         mask = mask & np.isfinite(PI).all(axis=1)
     if mask.sum() == 0:
         raise ValueError("No finite rows remain after masking.")
-    y = y[mask]; yhat = yhat[mask]
-    if PI is not None: PI = PI[mask]
+    y = y[mask]
+    yhat = yhat[mask]
+    if PI is not None:
+        PI = PI[mask]
     rm = rmse(y, yhat)
     ma = mean_absolute_error(y, yhat)
     try:
@@ -167,9 +157,10 @@ def safe_metrics(ytrue, ypred, PI=None):
         r2 = np.nan
     cov = np.nan
     if PI is not None:
-        lo, hi = PI[:,0], PI[:,1]
+        lo, hi = PI[:, 0], PI[:, 1]
         cov = float(np.mean((y >= lo) & (y <= hi)))
     return rm, ma, r2, cov, y, yhat, PI
+
 
 # ---------- wavelet denoise ----------
 def wavelet_denoise_1d(x, wavelet="db2", level=None, thr_mult=0.8):
@@ -187,24 +178,30 @@ def wavelet_denoise_1d(x, wavelet="db2", level=None, thr_mult=0.8):
         Denoised vector. If `pywt` unavailable or n<8, returns `x`.
     Notes
     -----
-    Used as an optional prefilter before univariate basis functions. 
+    Used as an optional prefilter before univariate basis functions.
     """
     x = np.asarray(x, float)
-    if not HAS_PYWT or x.size < 8: return x
+    if not HAS_PYWT or x.size < 8:
+        return x
     try:
         w = pywt.Wavelet(wavelet)
         max_level = pywt.dwt_max_level(len(x), w.dec_len)
         level = min(level or max_level, max_level)
-        if level <= 0: return x
+        if level <= 0:
+            return x
         coeffs = pywt.wavedec(x, wavelet, level=level)
         sigma = np.median(np.abs(coeffs[-1])) / 0.6745 + 1e-12
         thr = thr_mult * sigma * np.sqrt(2 * np.log(len(x)))
-        coeffs_d = [coeffs[0]] + [pywt.threshold(c, thr, mode='soft') for c in coeffs[1:]]
+        coeffs_d = [coeffs[0]] + [
+            pywt.threshold(c, thr, mode="soft") for c in coeffs[1:]
+        ]
         x_rec = pywt.waverec(coeffs_d, wavelet)
-        if x_rec.size != x.size: x_rec = x_rec[:x.size]
+        if x_rec.size != x.size:
+            x_rec = x_rec[: x.size]
         return safe_nan_to_num(x_rec)
     except Exception:
         return x
+
 
 # ---------- feature banks ----------
 def gaussian_rbf_1d(x, centers, width):
@@ -225,7 +222,8 @@ def gaussian_rbf_1d(x, centers, width):
         Exp(- (x - c_k)^2 / (2*width^2)).
     """
     x = x[:, None]
-    return np.exp(-((x - centers[None, :]) ** 2) / (2.0 * (width ** 2) + 1e-12))
+    return np.exp(-((x - centers[None, :]) ** 2) / (2.0 * (width**2) + 1e-12))
+
 
 def hinge_bank_1d(x, knots):
     """
@@ -236,10 +234,14 @@ def hinge_bank_1d(x, knots):
     ndarray, shape (n_samples, 2 * n_knots)
         [max(0, x - κ_m), max(0, κ_m - x)] for each knot.
     """
-    x = x[:, None]; K = knots[None, :]
+    x = x[:, None]
+    K = knots[None, :]
     return np.hstack([np.maximum(0.0, x - K), np.maximum(0.0, K - x)])
 
-def make_univariate_bank(X, active_dims, n_knots=6, use_wavelet=True, include_splines=True):
+
+def make_univariate_bank(
+    X, active_dims, n_knots=6, use_wavelet=True, include_splines=True
+):
     """
     Build per-dimension basis functions (RBFs, sin/cos, hinge splines).
 
@@ -259,9 +261,10 @@ def make_univariate_bank(X, active_dims, n_knots=6, use_wavelet=True, include_sp
     Returns
     -------
     (Phi, names) : (ndarray, list[str])
-        Feature bank block and corresponding names. 
+        Feature bank block and corresponding names.
     """
-    n, p = X.shape; feats = []
+    n, p = X.shape
+    feats = []
     for j in active_dims:
         xj = X[:, j]
         xj_d = wavelet_denoise_1d(xj) if use_wavelet else xj
@@ -269,18 +272,25 @@ def make_univariate_bank(X, active_dims, n_knots=6, use_wavelet=True, include_sp
             continue
         qs = np.linspace(0.05, 0.95, n_knots)
         centers = np.quantile(xj_d, qs)
-        if len(centers) < 2: continue
-        width = (np.quantile(xj_d, 0.9) - np.quantile(xj_d, 0.1)) / (2.0 * n_knots) + 1e-12
+        if len(centers) < 2:
+            continue
+        width = (np.quantile(xj_d, 0.9) - np.quantile(xj_d, 0.1)) / (
+            2.0 * n_knots
+        ) + 1e-12
         rbf = gaussian_rbf_1d(xj_d, centers, width)
         base = xj_d / (np.std(xj_d) + 1e-12)
-        trig = np.column_stack([np.sin(base * f) for f in (0.5, 1.0, 2.0, 3.0)] +
-                               [np.cos(base * f) for f in (0.5, 1.0, 2.0, 3.0)])
-        feats.append(rbf); feats.append(trig)
+        trig = np.column_stack(
+            [np.sin(base * f) for f in (0.5, 1.0, 2.0, 3.0)]
+            + [np.cos(base * f) for f in (0.5, 1.0, 2.0, 3.0)]
+        )
+        feats.append(rbf)
+        feats.append(trig)
         if include_splines:
             knots = np.quantile(xj_d, np.linspace(0.1, 0.9, max(4, n_knots - 2)))
             spl = hinge_bank_1d(xj_d, knots)
             feats.append(spl)
     return np.hstack(feats) if feats else np.zeros((n, 0))
+
 
 def stability_select_pairs(X, y, top_k=48, rounds=6, subsample=0.7, rng=0):
     """
@@ -307,12 +317,15 @@ def stability_select_pairs(X, y, top_k=48, rounds=6, subsample=0.7, rng=0):
     Returns
     -------
     list[tuple[int, int]]
-        Chosen (i, j) feature index pairs. 
+        Chosen (i, j) feature index pairs.
     """
-    rng = np.random.RandomState(rng); n, p = X.shape; counts = {}
+    rng = np.random.RandomState(rng)
+    n, p = X.shape
+    counts = {}
     for _ in range(rounds):
         m = max(16, int(subsample * n))
-        if m <= 2: break
+        if m <= 2:
+            break
         idx = rng.choice(n, size=m, replace=False)
         Xi, yi = X[idx], y[idx]
         D = min(p, max(8, int(0.6 * p)))
@@ -321,18 +334,22 @@ def stability_select_pairs(X, y, top_k=48, rounds=6, subsample=0.7, rng=0):
         denom_yy = float(np.sqrt(np.dot(yy, yy)) + 1e-12)
         cand = []
         for a in range(len(dims)):
-            i = dims[a]; xi = Xi[:, i]
-            for b in range(a+1, len(dims)):
-                j = dims[b]; xj = Xi[:, j]
-                z = xi * xj; zc = z - z.mean()
+            i = dims[a]
+            xi = Xi[:, i]
+            for b in range(a + 1, len(dims)):
+                j = dims[b]
+                xj = Xi[:, j]
+                z = xi * xj
+                zc = z - z.mean()
                 num = float(np.dot(zc, yy))
                 den = float(np.sqrt(np.dot(zc, zc)) * denom_yy + 1e-12)
-                cand.append((abs(num/den), i, j))
+                cand.append((abs(num / den), i, j))
         cand.sort(reverse=True)
-        for _, i, j in cand[:max(8, top_k // 4)]:
+        for _, i, j in cand[: max(8, top_k // 4)]:
             counts[(i, j)] = counts.get((i, j), 0) + 1
     items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
     return [(i, j) for (i, j), _ in items[:top_k]]
+
 
 def make_pair_bank(X, pairs):
     """
@@ -343,16 +360,19 @@ def make_pair_bank(X, pairs):
     (Phi, names) : (ndarray, list[str])
         Includes products, absolute differences, and simple trig couplings.
     """
-    if not pairs: return np.zeros((X.shape[0], 0))
+    if not pairs:
+        return np.zeros((X.shape[0], 0))
     cols = []
-    for (i, j) in pairs:
-        xi = X[:, i]; xj = X[:, j]
+    for i, j in pairs:
+        xi = X[:, i]
+        xj = X[:, j]
         cols.append(xi * xj)
         cols.append(np.abs(xi - xj))
         for f in (0.5, 1.0, 2.0):
-            cols.append(np.sin(f*(xi + xj)))
-            cols.append(np.cos(f*(xi - xj)))
+            cols.append(np.sin(f * (xi + xj)))
+            cols.append(np.cos(f * (xi - xj)))
     return np.column_stack(cols) if cols else np.zeros((X.shape[0], 0))
+
 
 def select_top_triples(X, y, pairs, max_triples=6):
     """
@@ -368,24 +388,30 @@ def select_top_triples(X, y, pairs, max_triples=6):
     list[tuple[int, int, int]]
         Selected triples by correlation with `y`.
     """
-    if max_triples <= 0 or not pairs: return []
+    if max_triples <= 0 or not pairs:
+        return []
     uniq = sorted(set([i for (i, j) in pairs] + [j for (i, j) in pairs]))
     cand = []
     yy = y - y.mean()
     denom_yy = float(np.sqrt(np.dot(yy, yy)) + 1e-12)
     for a in range(len(uniq)):
-        for b in range(a+1, len(uniq)):
-            for c in range(b+1, len(uniq)):
+        for b in range(a + 1, len(uniq)):
+            for c in range(b + 1, len(uniq)):
                 i, j, k = uniq[a], uniq[b], uniq[c]
-                z = X[:, i] * X[:, j] * X[:, k]; zc = z - z.mean()
+                z = X[:, i] * X[:, j] * X[:, k]
+                zc = z - z.mean()
                 num = float(np.dot(zc, yy))
                 den = float(np.sqrt(np.dot(zc, zc)) * denom_yy + 1e-12)
-                cand.append((abs(num/den), (i, j, k)))
-                if len(cand) > 1500: break
-            if len(cand) > 1500: break
-        if len(cand) > 1500: break
+                cand.append((abs(num / den), (i, j, k)))
+                if len(cand) > 1500:
+                    break
+            if len(cand) > 1500:
+                break
+        if len(cand) > 1500:
+            break
     cand.sort(reverse=True)
     return [tpl for _, tpl in cand[:max_triples]]
+
 
 def build_triple_cols(X, triples):
     """
@@ -396,8 +422,10 @@ def build_triple_cols(X, triples):
     (Phi, names) : (ndarray, list[str])
         Column block for x_i * x_j * x_k.
     """
-    if not triples: return np.zeros((X.shape[0], 0))
+    if not triples:
+        return np.zeros((X.shape[0], 0))
     return np.column_stack([X[:, i] * X[:, j] * X[:, k] for (i, j, k) in triples])
+
 
 def median_gamma(Xs, sample=512):
     """
@@ -416,14 +444,16 @@ def median_gamma(Xs, sample=512):
         Gamma (>0). Used for RFF draw scale.
     """
     n = Xs.shape[0]
-    if n < 2: return 1.0
+    if n < 2:
+        return 1.0
     idx = np.random.RandomState(0).choice(n, size=min(sample, n), replace=False)
     Xs = Xs[idx]
-    d2 = np.sum((Xs[:, None, :] - Xs[None, :, :])**2, axis=2)
+    d2 = np.sum((Xs[:, None, :] - Xs[None, :, :]) ** 2, axis=2)
     tri = d2[np.triu_indices_from(d2, k=1)]
     med = np.median(tri) if tri.size else np.mean(d2)
     med = float(med) if np.isfinite(med) and med > 1e-12 else 1.0
     return 1.0 / (med + 1e-9)
+
 
 # ---------- safe linear algebra ----------
 def safe_cholesky_psd(M, init_jitter=1e-6, max_tries=6):
@@ -458,6 +488,7 @@ def safe_cholesky_psd(M, init_jitter=1e-6, max_tries=6):
     L = np.linalg.cholesky(Msym + 1e-8 * I)
     return L, jitter
 
+
 # ---------- calibration ----------
 def robust_affine(yhat_val, y_val):
     """
@@ -486,7 +517,7 @@ def robust_affine(yhat_val, y_val):
         a, b = float(hub.coef_[0]), float(hub.coef_[1])
     except Exception:
         # fallback least squares
-        A = X.T @ X + 1e-9*np.eye(X.shape[1])
+        A = X.T @ X + 1e-9 * np.eye(X.shape[1])
         a, b = np.linalg.solve(A, X.T @ y_val)
         a, b = float(a), float(b)
     return a, b
@@ -504,6 +535,7 @@ def _ensure_feature_names(X, feature_names):
         return list(X.columns)
     return [f"x{j}" for j in range(X.shape[1])]
 
+
 @dataclass
 class _FIResult:
     """
@@ -518,6 +550,7 @@ class _FIResult:
     details : dict
         Optional method-specific extras (e.g., per-repeat drops).
     """
+
     names: List[str]
     importances: np.ndarray
     details: Dict[str, Any]
@@ -551,7 +584,7 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
     rff_dims : int, default=240
         Number of random Fourier features (RBF kernel approx).
     rff_gamma : {"auto", float}, default="auto"
-        RBF scale; "auto" uses median heuristic. 
+        RBF scale; "auto" uses median heuristic.
     n_atoms : int, default=64
         Number of local radial atoms.
     ridge_alpha : float, default=1.0
@@ -573,15 +606,15 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
     stack_mode : {"ridge", "blend"}, default="ridge"
         Stacker choice; "blend" does convex linear/nonlinear mix.
     stack_ridge_alpha : float, default=1e-3
-        Ridge penalty for stacker. 
+        Ridge penalty for stacker.
     val_size : float, default=0.20
         Validation fraction (tail if temporal).
     val_mode : {"temporal", "random"}, default="temporal"
-        Split protocol. Temporal preserves order. 
+        Split protocol. Temporal preserves order.
     use_target_transform : bool, default=False
         Learn a target transform on train (Yeo-Johnson) and invert at predict.
     target_transform : {"identity","yeo-johnson"}, default="identity"
-        Transform to apply to targets. 
+        Transform to apply to targets.
     random_state : int, default=0
         Seed controlling stochastic parts (pairs selection, dropout, RFF).
 
@@ -605,18 +638,33 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         Conformal PI half-width for 90% intervals (split residuals).
     """
 
-    def __init__(self,
-                 n_keep_dims=20, n_knots=7, use_wavelet=True, include_splines=True,
-                 top_pairs=64, triple_max=6,
-                 rff_dims=240, rff_gamma='auto',
-                 n_atoms=64, ridge_alpha=1.0,
-                 pre_screen_frac=0.25, pre_screen_cap=900,
-                 screen_frac=0.6, screen_cap=1100,
-                 bank_dropout=0.10, huber_refit=True, huber_iters=3,
-                 stack_mode="ridge", stack_ridge_alpha=1e-3,
-                 val_size=0.20, val_mode="temporal",
-                 use_target_transform=False, target_transform="identity",
-                 random_state=0):
+    def __init__(
+        self,
+        n_keep_dims=20,
+        n_knots=7,
+        use_wavelet=True,
+        include_splines=True,
+        top_pairs=64,
+        triple_max=6,
+        rff_dims=240,
+        rff_gamma="auto",
+        n_atoms=64,
+        ridge_alpha=1.0,
+        pre_screen_frac=0.25,
+        pre_screen_cap=900,
+        screen_frac=0.6,
+        screen_cap=1100,
+        bank_dropout=0.10,
+        huber_refit=True,
+        huber_iters=3,
+        stack_mode="ridge",
+        stack_ridge_alpha=1e-3,
+        val_size=0.20,
+        val_mode="temporal",
+        use_target_transform=False,
+        target_transform="identity",
+        random_state=0,
+    ):
         # feature-bank & screening
         self.n_keep_dims = int(n_keep_dims)
         self.n_knots = int(n_knots)
@@ -676,35 +724,50 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         # active dims by MI or cosine corr (fallback)
         try:
             from sklearn.feature_selection import mutual_info_regression
+
             mi = mutual_info_regression(Xs, ytr, random_state=self.random_state)
         except Exception:
             yc = ytr - ytr.mean()
             Zc = Xs - Xs.mean(axis=0)
             num = np.abs(Zc.T @ yc)
-            den = np.sqrt(np.sum(Zc**2, axis=0)) * np.sqrt(np.sum(yc**2) + 1e-12) + 1e-12
+            den = (
+                np.sqrt(np.sum(Zc**2, axis=0)) * np.sqrt(np.sum(yc**2) + 1e-12) + 1e-12
+            )
             mi = num / den
         order = np.argsort(mi)[::-1]
-        self.active_dims_ = order[:min(self.n_keep_dims, p)]
+        self.active_dims_ = order[: min(self.n_keep_dims, p)]
 
         pairs_k, triples_k, rff_k, atoms_k = self._dynamic_sizes(n, p)
-        self.pairs_k_, self.triples_k_, self.rff_k_, self.atoms_k_ = pairs_k, triples_k, rff_k, atoms_k
+        self.pairs_k_, self.triples_k_, self.rff_k_, self.atoms_k_ = (
+            pairs_k,
+            triples_k,
+            rff_k,
+            atoms_k,
+        )
 
         # interactions
-        self.pairs_ = stability_select_pairs(Xs, ytr, top_k=pairs_k, rounds=6, subsample=0.7, rng=self.random_state)
+        self.pairs_ = stability_select_pairs(
+            Xs, ytr, top_k=pairs_k, rounds=6, subsample=0.7, rng=self.random_state
+        )
         self.triples_ = select_top_triples(Xs, ytr, self.pairs_, max_triples=triples_k)
 
         # random Fourier features
-        gamma = median_gamma(Xs) if (isinstance(self.rff_gamma, str) and self.rff_gamma == 'auto') else float(self.rff_gamma)
+        gamma = (
+            median_gamma(Xs)
+            if (isinstance(self.rff_gamma, str) and self.rff_gamma == "auto")
+            else float(self.rff_gamma)
+        )
         rng = np.random.RandomState(self.random_state + 7)
         self.rff_W_ = rng.normal(0, np.sqrt(max(gamma, 1e-6)), size=(p, rff_k))
-        self.rff_b_ = rng.uniform(0, 2*np.pi, size=(rff_k,))
+        self.rff_b_ = rng.uniform(0, 2 * np.pi, size=(rff_k,))
 
         # atoms
         rngc = np.random.RandomState(self.random_state + 13)
         m = min(n, atoms_k)
         idx = rngc.choice(n, size=m, replace=False)
         self.atom_centers_ = Xs[idx]
-        subn = min(512, n); sub = Xs[rngc.choice(n, size=subn, replace=False)]
+        subn = min(512, n)
+        sub = Xs[rngc.choice(n, size=subn, replace=False)]
         d = np.linalg.norm(sub[:, None, :] - sub[None, :, :], axis=2)
         med = np.median(d) + 1e-9
         self.atom_s2_ = (0.5 * med) ** 2
@@ -719,17 +782,33 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             Concatenated columns: [1, Xs, uni, pair, triple, RFF, atoms].
         """
         n, p = Xs.shape
-        U  = make_univariate_bank(Xs, self.active_dims_, n_knots=self.n_knots,
-                                  use_wavelet=self.use_wavelet, include_splines=self.include_splines)
+        U = make_univariate_bank(
+            Xs,
+            self.active_dims_,
+            n_knots=self.n_knots,
+            use_wavelet=self.use_wavelet,
+            include_splines=self.include_splines,
+        )
         PB = make_pair_bank(Xs, self.pairs_)
         TB = build_triple_cols(Xs, self.triples_)
-        RFF = np.sqrt(2.0 / max(1, self.rff_k_)) * np.cos(Xs @ self.rff_W_ + self.rff_b_) if self.rff_k_ > 0 else np.zeros((n, 0))
-        if getattr(self, "atom_centers_", None) is not None and self.atom_centers_.size > 0:
+        RFF = (
+            np.sqrt(2.0 / max(1, self.rff_k_)) * np.cos(Xs @ self.rff_W_ + self.rff_b_)
+            if self.rff_k_ > 0
+            else np.zeros((n, 0))
+        )
+        if (
+            getattr(self, "atom_centers_", None) is not None
+            and self.atom_centers_.size > 0
+        ):
             D = np.linalg.norm(Xs[:, None, :] - self.atom_centers_[None, :, :], axis=2)
-            AT = np.exp(-(D ** 2) / (2 * self.atom_s2_ + 1e-12))
+            AT = np.exp(-(D**2) / (2 * self.atom_s2_ + 1e-12))
         else:
             AT = np.zeros((n, 0))
-        Phi = np.hstack([np.ones((n,1)), Xs, U, PB, TB, RFF, AT]) if n > 0 else np.zeros((0,1))
+        Phi = (
+            np.hstack([np.ones((n, 1)), Xs, U, PB, TB, RFF, AT])
+            if n > 0
+            else np.zeros((0, 1))
+        )
         return safe_nan_to_num(Phi)
 
     def _standardize_design(self, Phi):
@@ -743,9 +822,12 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         """
         if Phi.size == 0:
             return Phi, np.array([0.0]), np.array([1.0])
-        mu = Phi.mean(axis=0); sd = Phi.std(axis=0) + 1e-12
-        mu[0] = 0.0; sd[0] = 1.0
-        Z = (Phi - mu) / sd; Z[:,0] = 1.0
+        mu = Phi.mean(axis=0)
+        sd = Phi.std(axis=0) + 1e-12
+        mu[0] = 0.0
+        sd[0] = 1.0
+        Z = (Phi - mu) / sd
+        Z[:, 0] = 1.0
         return Z, mu, sd
 
     def _whiten(self, Z):
@@ -772,8 +854,8 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             Transformed targets y^(t). Inverse via `_target_inverse`.
         """
         if self.use_target_transform and self.target_transform.lower() != "identity":
-            self.pt_ = PowerTransformer(method='yeo-johnson', standardize=False)
-            return self.pt_.fit_transform(y.reshape(-1,1)).ravel()
+            self.pt_ = PowerTransformer(method="yeo-johnson", standardize=False)
+            return self.pt_.fit_transform(y.reshape(-1, 1)).ravel()
         # identity
         self.pt_ = None
         return y.copy()
@@ -781,7 +863,7 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
     def _target_inverse(self, yt):
         """Invert the fitted target transform (no-op if identity)."""
         if hasattr(self, "pt_") and self.pt_ is not None:
-            return self.pt_.inverse_transform(np.asarray(yt).reshape(-1,1)).ravel()
+            return self.pt_.inverse_transform(np.asarray(yt).reshape(-1, 1)).ravel()
         return np.asarray(yt).ravel()
 
     # ---------- fit/predict ----------
@@ -801,10 +883,12 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         Returns
         -------
         self : ORBITRegressor
-            Fitted estimator. 
+            Fitted estimator.
         """
-        X = np.asarray(X, float); y = np.asarray(y, float).ravel()
-        X = safe_nan_to_num(X); y = safe_nan_to_num(y)
+        X = np.asarray(X, float)
+        y = np.asarray(y, float).ravel()
+        X = safe_nan_to_num(X)
+        y = safe_nan_to_num(y)
         n = len(y)
 
         # scaler on full train block
@@ -818,31 +902,39 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             val_idx = np.arange(n - n_val, n)
         else:
             rs = np.random.RandomState(self.random_state)
-            idx = rs.permutation(n); val_idx, tr_idx = idx[:n_val], idx[n_val:]
+            idx = rs.permutation(n)
+            val_idx, tr_idx = idx[:n_val], idx[n_val:]
 
         Xtr, ytr = Xs_all[tr_idx], y[tr_idx]
         Xval, yval = Xs_all[val_idx], y[val_idx]
 
         # target transform
-        ytr_t  = self._target_transform_fit(ytr)
-        yval_t = yval if self.pt_ is None else self.pt_.transform(yval.reshape(-1,1)).ravel()
+        ytr_t = self._target_transform_fit(ytr)
+        yval_t = (
+            yval
+            if self.pt_ is None
+            else self.pt_.transform(yval.reshape(-1, 1)).ravel()
+        )
 
         # ---- Stage A: Linear head on raw Xs ----
         try:
             elin = ElasticNetCV(
                 l1_ratio=[0.1, 0.3, 0.6, 0.9],
                 alphas=np.logspace(-3, 0.7, 12),
-                cv=3, fit_intercept=False, random_state=self.random_state, max_iter=4000
+                cv=3,
+                fit_intercept=False,
+                random_state=self.random_state,
+                max_iter=4000,
             )
             elin.fit(Xtr, ytr_t)
             self.lin_coef_ = elin.coef_.astype(float)
         except Exception:
             # ridge fallback
-            A = Xtr.T @ Xtr + 1.0*np.eye(Xtr.shape[1])
+            A = Xtr.T @ Xtr + 1.0 * np.eye(Xtr.shape[1])
             b = Xtr.T @ ytr_t
             self.lin_coef_ = np.linalg.solve(A, b)
 
-        yhat_lin_tr  = Xtr  @ self.lin_coef_
+        yhat_lin_tr = Xtr @ self.lin_coef_
         yhat_lin_val = Xval @ self.lin_coef_
 
         # ---- Stage B: Nonlinear bank ----
@@ -859,7 +951,9 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             Z_pre = np.ones((Z_tr.shape[0], 1))
         else:
             num = np.abs(np.dot(yc, Zc))
-            den = (np.sqrt(np.sum(Zc**2, axis=0)) + 1e-12) * np.sqrt(np.sum(yc**2) + 1e-12)
+            den = (np.sqrt(np.sum(Zc**2, axis=0)) + 1e-12) * np.sqrt(
+                np.sum(yc**2) + 1e-12
+            )
             scor = num / den
             pre_nom = int(self.pre_screen_frac * Z_tr.shape[1])
             pre_cap = min(self.pre_screen_cap, int(0.9 * max(1, Z_tr.shape[0])))
@@ -873,14 +967,17 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         # Stage 2 screening
         Zc2 = Z_tr_w - Z_tr_w.mean(axis=0)
         if Z_tr_w.shape[1] == 0:
-            keep_idx = np.array([0], dtype=int); Zs = np.ones((Z_tr_w.shape[0], 1))
+            keep_idx = np.array([0], dtype=int)
+            Zs = np.ones((Z_tr_w.shape[0], 1))
         else:
             num2 = np.abs(np.dot(yc, Zc2))
-            den2 = (np.sqrt(np.sum(Zc2**2, axis=0)) + 1e-12) * np.sqrt(np.sum(yc**2) + 1e-12)
+            den2 = (np.sqrt(np.sum(Zc2**2, axis=0)) + 1e-12) * np.sqrt(
+                np.sum(yc**2) + 1e-12
+            )
             scor2 = num2 / den2
             k_nom = int(self.screen_frac * Z_tr_w.shape[1])
-            cap   = min(self.screen_cap, int(0.8 * max(1, Z_tr_w.shape[0])))
-            k     = max(90, min(k_nom, cap))
+            cap = min(self.screen_cap, int(0.8 * max(1, Z_tr_w.shape[0])))
+            k = max(90, min(k_nom, cap))
             idx_sorted = np.argsort(scor2)[::-1][:k]
             keep_idx = np.unique(np.concatenate([[0], idx_sorted]))
             Zs = Z_tr_w[:, keep_idx]
@@ -892,7 +989,10 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             enet = ElasticNetCV(
                 l1_ratio=[0.1, 0.3, 0.6],
                 alphas=np.logspace(-3, 0.7, 10),
-                cv=3, fit_intercept=False, random_state=self.random_state, max_iter=3000
+                cv=3,
+                fit_intercept=False,
+                random_state=self.random_state,
+                max_iter=3000,
             )
             enet.fit(Zin, y_t)
             return enet.coef_.astype(float)
@@ -905,10 +1005,12 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
                 mask[0] = True
                 drop = rng.rand(Zs.shape[1]) < self.bank_dropout
                 mask &= ~drop
-                if mask.sum() < max(12, int(0.2*Zs.shape[1])):
-                    mask[:] = True; mask[0] = True
+                if mask.sum() < max(12, int(0.2 * Zs.shape[1])):
+                    mask[:] = True
+                    mask[0] = True
                 w = _fit_enet(Zs[:, mask], ytr_t)
-                tmp = np.zeros_like(coef_accum); tmp[mask] = w
+                tmp = np.zeros_like(coef_accum)
+                tmp[mask] = w
                 coef_accum += tmp
             else:
                 coef_accum += _fit_enet(Zs, ytr_t)
@@ -916,7 +1018,8 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
 
         # robust refit (Huber–ridge) on active set
         act = np.flatnonzero(np.abs(w_s) > 1e-8)
-        if act.size == 0: act = np.array([0], int)
+        if act.size == 0:
+            act = np.array([0], int)
         Za = Zs[:, act]
         if self.huber_refit and Za.shape[1] > 0:
             w_act = w_s[act].copy()
@@ -926,19 +1029,23 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
                 r = ytr_t - Za @ w_act
                 wts = np.where(np.abs(r) <= delta, 1.0, delta / (np.abs(r) + 1e-12))
                 W12 = np.sqrt(wts)[:, None]
-                A = (Za * W12).T @ (Za * W12) + (self.ridge_alpha + 1e-6) * np.eye(Za.shape[1])
+                A = (Za * W12).T @ (Za * W12) + (self.ridge_alpha + 1e-6) * np.eye(
+                    Za.shape[1]
+                )
                 b = (Za * W12).T @ (ytr_t * np.sqrt(wts))
                 w_act = np.linalg.solve(A, b)
-            w_s = np.zeros_like(w_s); w_s[act] = w_act
+            w_s = np.zeros_like(w_s)
+            w_s[act] = w_act
 
         # stash bank params
-        self.pre_keep_      = pre_keep
+        self.pre_keep_ = pre_keep
         self.bank_keep_idx_ = keep_idx
-        self.bank_coef_     = w_s
+        self.bank_coef_ = w_s
 
         # Validation preds for stacking
         Phi_val_full = self._make_bank_given_params(Xval)
-        Z_val0 = (Phi_val_full - self.mu_bank_) / self.sd_bank_; Z_val0[:, 0] = 1.0
+        Z_val0 = (Phi_val_full - self.mu_bank_) / self.sd_bank_
+        Z_val0[:, 0] = 1.0
 
         # 1) select the same pre-screened columns as train
         Z_val_pre = Z_val0[:, self.pre_keep_]
@@ -961,21 +1068,31 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         # ================= Anti-flatline + calibration =================
         tiny = 1e-8
         std_lin = float(np.std(yhat_lin_val))
-        std_nl  = float(np.std(yhat_nl_val))
+        std_nl = float(np.std(yhat_nl_val))
 
         self.w_stack_ = None
-        self.alpha_   = None
+        self.alpha_ = None
 
         # 1) If both heads near-constant, force intercept = mean(yval_t)
         if std_lin < 1e-6 and std_nl < 1e-6:
-            self.w_stack_ = np.array([float(np.mean(yval_t)), 0.0, 0.0, 0.0], dtype=float)
+            self.w_stack_ = np.array(
+                [float(np.mean(yval_t)), 0.0, 0.0, 0.0], dtype=float
+            )
         elif self.stack_mode.lower() == "ridge":
-            S = np.column_stack([np.ones_like(yhat_lin_val),
-                                 yhat_lin_val,
-                                 yhat_nl_val,
-                                 yhat_lin_val * yhat_nl_val])
+            S = np.column_stack(
+                [
+                    np.ones_like(yhat_lin_val),
+                    yhat_lin_val,
+                    yhat_nl_val,
+                    yhat_lin_val * yhat_nl_val,
+                ]
+            )
             try:
-                rrg = Ridge(alpha=self.stack_ridge_alpha, fit_intercept=False, random_state=self.random_state)
+                rrg = Ridge(
+                    alpha=self.stack_ridge_alpha,
+                    fit_intercept=False,
+                    random_state=self.random_state,
+                )
                 rrg.fit(S, yval_t)
                 self.w_stack_ = rrg.coef_.astype(float)
             except Exception:
@@ -986,19 +1103,22 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             alphas = np.linspace(0.0, 1.0, 21)
             best_alpha, best_rmse = 0.5, 1e18
             for a in alphas:
-                yv = a*yhat_lin_val + (1.0 - a)*yhat_nl_val
-                r  = float(np.sqrt(np.mean((yv - yval_t)**2)))
-                if r < best_rmse: best_rmse, best_alpha = r, float(a)
+                yv = a * yhat_lin_val + (1.0 - a) * yhat_nl_val
+                r = float(np.sqrt(np.mean((yv - yval_t) ** 2)))
+                if r < best_rmse:
+                    best_rmse, best_alpha = r, float(a)
             self.alpha_ = best_alpha
 
         # 3) Build validation preds in transformed space
         if self.w_stack_ is not None:
-            yval_hat_t = (self.w_stack_[0]
-                          + self.w_stack_[1]*yhat_lin_val
-                          + self.w_stack_[2]*yhat_nl_val
-                          + self.w_stack_[3]*(yhat_lin_val*yhat_nl_val))
+            yval_hat_t = (
+                self.w_stack_[0]
+                + self.w_stack_[1] * yhat_lin_val
+                + self.w_stack_[2] * yhat_nl_val
+                + self.w_stack_[3] * (yhat_lin_val * yhat_nl_val)
+            )
         else:
-            yval_hat_t = self.alpha_*yhat_lin_val + (1.0 - self.alpha_)*yhat_nl_val
+            yval_hat_t = self.alpha_ * yhat_lin_val + (1.0 - self.alpha_) * yhat_nl_val
 
         # 4) Calibration y_val_t ≈ a + b*yval_hat_t
         if float(np.std(yval_hat_t)) < 1e-8:
@@ -1032,9 +1152,10 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         y : ndarray of shape (n_samples,)
             Point predictions on original target scale.
         (optional) PI : ndarray of shape (n_samples, 2)
-            Lower/upper bounds if `return_interval=True`. 
+            Lower/upper bounds if `return_interval=True`.
         """
-        X = np.asarray(X, float); X = safe_nan_to_num(X)
+        X = np.asarray(X, float)
+        X = safe_nan_to_num(X)
         Xs = self.scaler_.transform(X)
 
         # linear head
@@ -1042,20 +1163,23 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
 
         # nonlinear bank
         Phi = self._make_bank_given_params(Xs)
-        Z0  = (Phi - self.mu_bank_) / self.sd_bank_; Z0[:,0] = 1.0
+        Z0 = (Phi - self.mu_bank_) / self.sd_bank_
+        Z0[:, 0] = 1.0
         Z_pre = Z0[:, self.pre_keep_]
-        Z_w   = Z_pre @ self.W_whiten_
-        Zk    = Z_w[:, self.bank_keep_idx_]
+        Z_w = Z_pre @ self.W_whiten_
+        Zk = Z_w[:, self.bank_keep_idx_]
         y_nl_t = Zk @ self.bank_coef_
 
         # stack/blend
         if getattr(self, "w_stack_", None) is not None:
-            yhat_t = (self.w_stack_[0]
-                      + self.w_stack_[1]*y_lin_t
-                      + self.w_stack_[2]*y_nl_t
-                      + self.w_stack_[3]*(y_lin_t*y_nl_t))
+            yhat_t = (
+                self.w_stack_[0]
+                + self.w_stack_[1] * y_lin_t
+                + self.w_stack_[2] * y_nl_t
+                + self.w_stack_[3] * (y_lin_t * y_nl_t)
+            )
         else:
-            yhat_t = self.alpha_*y_lin_t + (1.0 - self.alpha_)*y_nl_t
+            yhat_t = self.alpha_ * y_lin_t + (1.0 - self.alpha_) * y_nl_t
 
         # apply calibration (a + b*yhat_t)
         a = getattr(self, "cal_a_", 0.0)
@@ -1090,9 +1214,7 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         if not hasattr(self, "lin_coef_"):
             raise RuntimeError("Model not yet fit; lin_coef_ missing.")
 
-        names = _ensure_feature_names(
-            np.zeros((1, len(self.lin_coef_))), feature_names
-        )
+        names = _ensure_feature_names(np.zeros((1, len(self.lin_coef_))), feature_names)
         imp = np.abs(np.asarray(self.lin_coef_).ravel().astype(float))
         if normalize and imp.sum() > 0:
             imp = imp / imp.sum()
@@ -1166,7 +1288,8 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
             if delta_orig[j] == 0.0:
                 imp[j] = 0.0
                 continue
-            Xp = Xb.copy(); Xm = Xb.copy()
+            Xp = Xb.copy()
+            Xm = Xb.copy()
             Xp[:, j] += delta_orig[j]
             Xm[:, j] -= delta_orig[j]
             yp = np.asarray(self.predict(Xp)).ravel()
@@ -1183,8 +1306,9 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         df.reset_index(drop=True, inplace=True)
 
         if return_details:
-            return df, _FIResult(names, imp, dict(
-                eps_std=eps_std, sample=len(Xb), method="sensitivity"))
+            return df, _FIResult(
+                names, imp, dict(eps_std=eps_std, sample=len(Xb), method="sensitivity")
+            )
         return df
 
     # =============== Permutation importance (model-agnostic) ===============
@@ -1226,7 +1350,8 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         """
         import pandas as pd
 
-        X = np.asarray(X, float); y = np.asarray(y, float).ravel()
+        X = np.asarray(X, float)
+        y = np.asarray(y, float).ravel()
         names = _ensure_feature_names(X, feature_names)
         rng = np.random.RandomState(random_state)
 
@@ -1240,25 +1365,29 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         if block_size is None:
             # vanilla sklearn permutation importance
             pi = permutation_importance(
-                self, X_eval, y_eval,
+                self,
+                X_eval,
+                y_eval,
                 n_repeats=n_repeats,
                 random_state=random_state,
-                scoring=scoring
+                scoring=scoring,
             )
             mean_imp = np.maximum(0.0, pi.importances_mean)
-            std_imp  = pi.importances_std
+            std_imp = pi.importances_std
         else:
             # block permutation (custom)
             n, p = X_eval.shape
             K = int(np.ceil(n / block_size))
             base_pred = self.predict(X_eval)
             if scoring == "neg_mean_squared_error":
+
                 def scorer(y_true, y_pred):
-                    return -np.mean((y_true - y_pred)**2)
+                    return -np.mean((y_true - y_pred) ** 2)
+
             else:
                 # default to RMSE drop (negative)
                 def scorer(y_true, y_pred):
-                    return -np.sqrt(np.mean((y_true - y_pred)**2))
+                    return -np.sqrt(np.mean((y_true - y_pred) ** 2))
 
             base_score = scorer(y_eval, base_pred)
             reps = n_repeats
@@ -1271,30 +1400,46 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
                     order = np.arange(K)
                     rng.shuffle(order)
                     col = Xp[:, j].copy()
-                    blocks = [col[k*block_size:(k+1)*block_size] for k in range(K)]
+                    blocks = [
+                        col[k * block_size : (k + 1) * block_size] for k in range(K)
+                    ]
                     perm_col = np.concatenate([blocks[k] for k in order])[:n]
                     Xp[:, j] = perm_col
                     score_j = scorer(y_eval, self.predict(Xp))
                     drops[r, j] = base_score - score_j  # higher is more important
 
             mean_imp = np.maximum(0.0, drops.mean(axis=0))
-            std_imp  = drops.std(axis=0)
+            std_imp = drops.std(axis=0)
 
         if normalize and mean_imp.sum() > 0:
             norm = mean_imp.sum()
             mean_imp = mean_imp / norm
             std_imp = std_imp / norm
 
-        df = pd.DataFrame({
-            "feature": names,
-            "importance_perm_mean": mean_imp,
-            "importance_perm_std": std_imp
-        }).sort_values("importance_perm_mean", ascending=False).reset_index(drop=True)
+        df = (
+            pd.DataFrame(
+                {
+                    "feature": names,
+                    "importance_perm_mean": mean_imp,
+                    "importance_perm_std": std_imp,
+                }
+            )
+            .sort_values("importance_perm_mean", ascending=False)
+            .reset_index(drop=True)
+        )
 
         if return_details:
-            return df, _FIResult(names, mean_imp, dict(
-                n_repeats=n_repeats, scoring=scoring, sample=getattr(X_eval, "shape", [0])[0],
-                block_size=block_size, method="permutation"))
+            return df, _FIResult(
+                names,
+                mean_imp,
+                dict(
+                    n_repeats=n_repeats,
+                    scoring=scoring,
+                    sample=getattr(X_eval, "shape", [0])[0],
+                    block_size=block_size,
+                    method="permutation",
+                ),
+            )
         return df
 
     # =============== Unified convenience: sets feature_importances_ ===============
@@ -1304,7 +1449,7 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
         y_ref=None,
         feature_names=None,
         method: str = "sensitivity",
-        **kwargs
+        **kwargs,
     ):
         """
         Unified feature-importance entrypoint.
@@ -1350,7 +1495,9 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
 
         raise ValueError(f"Unknown method '{method}'.")
 
-    def predict_components(self, X, on_target_scale=True, include_stack=False, return_interval=False):
+    def predict_components(
+        self, X, on_target_scale=True, include_stack=False, return_interval=False
+    ):
         """
         Decompose predictions into linear and nonlinear components.
 
@@ -1380,26 +1527,28 @@ class ORBITRegressor(BaseEstimator, RegressorMixin):
 
         # nonlinear head (via bank)
         Phi = self._make_bank_given_params(Xs)
-        Z0  = (Phi - self.mu_bank_) / self.sd_bank_
+        Z0 = (Phi - self.mu_bank_) / self.sd_bank_
         Z0[:, 0] = 1.0
         Z_pre = Z0[:, self.pre_keep_]
-        Z_w   = Z_pre @ self.W_whiten_           # whiten
-        Zk    = Z_w[:, self.bank_keep_idx_]
+        Z_w = Z_pre @ self.W_whiten_  # whiten
+        Zk = Z_w[:, self.bank_keep_idx_]
         y_nl_t = Zk @ self.bank_coef_
 
         # stack (still in transformed space)
         if getattr(self, "w_stack_", None) is not None:
-            y_stack_t = (self.w_stack_[0]
-                        + self.w_stack_[1]*y_lin_t
-                        + self.w_stack_[2]*y_nl_t
-                        + self.w_stack_[3]*(y_lin_t*y_nl_t))
+            y_stack_t = (
+                self.w_stack_[0]
+                + self.w_stack_[1] * y_lin_t
+                + self.w_stack_[2] * y_nl_t
+                + self.w_stack_[3] * (y_lin_t * y_nl_t)
+            )
         else:
-            y_stack_t = self.alpha_*y_lin_t + (1.0 - self.alpha_)*y_nl_t
+            y_stack_t = self.alpha_ * y_lin_t + (1.0 - self.alpha_) * y_nl_t
 
         # back to original target scale
         if on_target_scale:
             y_lin = self._target_inverse(y_lin_t)
-            y_nl  = self._target_inverse(y_nl_t)
+            y_nl = self._target_inverse(y_nl_t)
             y_out = self._target_inverse(y_stack_t)
         else:
             y_lin, y_nl, y_out = y_lin_t, y_nl_t, y_stack_t
@@ -1431,9 +1580,10 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
     random_state : int, default=0
         Seed to diversify base learners.
     """
+
     def __init__(self, n_estimators=3, base_kwargs=None, random_state=0):
         self.n_estimators = int(n_estimators)
-        self.base_kwargs  = dict(base_kwargs or {})
+        self.base_kwargs = dict(base_kwargs or {})
         self.random_state = int(random_state)
 
     def fit(self, X, y):
@@ -1449,12 +1599,14 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
             seed = self.random_state + 177 * k
             # inject seed; do NOT pass any other random_state from base_kwargs
             kwargs = dict(self.base_kwargs)
-            kwargs['random_state'] = seed
+            kwargs["random_state"] = seed
             m = ORBITRegressor(**kwargs)
             m.fit(X, y)
             self.models_.append(m)
         # aggregate PI half-widths by RMS
-        self.q90_ = float(np.sqrt(np.mean([getattr(m, "q90_", 0.0)**2 for m in self.models_])))
+        self.q90_ = float(
+            np.sqrt(np.mean([getattr(m, "q90_", 0.0) ** 2 for m in self.models_]))
+        )
         return self
 
     def predict(self, X, return_interval=False):
@@ -1486,14 +1638,14 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
         across members for fair comparison.
         """
         import pandas as pd
+
         if not hasattr(self, "models_") or len(self.models_) == 0:
             raise RuntimeError("Bagged model not yet fit.")
 
         dfs = []
         for m in self.models_:
             df, meta = m.compute_feature_importances(
-                X_ref, y_ref=y_ref, feature_names=feature_names,
-                method=method, **kwargs
+                X_ref, y_ref=y_ref, feature_names=feature_names, method=method, **kwargs
             )
             dfs.append(df.set_index("feature"))
 
@@ -1503,9 +1655,15 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
             all_idx = all_idx.union(d.index)
 
         # pick the right column based on method
-        col = ("importance_sensitivity" if method == "sensitivity"
-               else "importance_perm_mean" if method == "permutation"
-               else "importance_linear")
+        col = (
+            "importance_sensitivity"
+            if method == "sensitivity"
+            else (
+                "importance_perm_mean"
+                if method == "permutation"
+                else "importance_linear"
+            )
+        )
 
         stacked = []
         for d in dfs:
@@ -1514,10 +1672,11 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
         arr = np.vstack(stacked)
         mean_imp = arr.mean(axis=0)
 
-        out = pd.DataFrame({
-            "feature": list(all_idx),
-            "importance_mean": mean_imp
-        }).sort_values("importance_mean", ascending=False).reset_index(drop=True)
+        out = (
+            pd.DataFrame({"feature": list(all_idx), "importance_mean": mean_imp})
+            .sort_values("importance_mean", ascending=False)
+            .reset_index(drop=True)
+        )
 
         # set sklearn-friendly attributes on the bagged wrapper
         self.feature_importances_ = out["importance_mean"].values
@@ -1526,7 +1685,9 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
         meta["method"] = method
         return out, meta
 
-    def predict_components(self, X, on_target_scale=True, include_stack=False, return_interval=False):
+    def predict_components(
+        self, X, on_target_scale=True, include_stack=False, return_interval=False
+    ):
         """
         Average component-wise outputs from members ("y_lin", "y_nl"),
         and optionally "y_stack" with an ensemble PI.
@@ -1542,13 +1703,13 @@ class ORBITBaggedRegressor(BaseEstimator, RegressorMixin):
                 X,
                 on_target_scale=on_target_scale,
                 include_stack=include_stack,
-                return_interval=False,          # we'll handle PI at the bag level
+                return_interval=False,  # we'll handle PI at the bag level
             )
             for m in self.models_
         ]
 
         y_lin = np.mean([o["y_lin"] for o in outs], axis=0)
-        y_nl  = np.mean([o["y_nl"]  for o in outs], axis=0)
+        y_nl = np.mean([o["y_nl"] for o in outs], axis=0)
 
         result = {"y_lin": y_lin, "y_nl": y_nl}
 

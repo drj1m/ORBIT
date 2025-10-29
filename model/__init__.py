@@ -1,1 +1,1 @@
-from .regression import ORBITRegressor, ORBITBaggedRegressor
+from .regression import ORBITBaggedRegressor, ORBITRegressor
