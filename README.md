@@ -94,6 +94,29 @@ orbit.explain provides optional utilities to understand ORBIT’s predictions:
 - beeswarm_one(sv, title): plots SHAP beeswarm charts.
 - perm_importance_callable(f, X, y): computes permutation feature importance for any callable predictor.
 
+``` python
+import shap
+from model.explain import shap_callables, beeswarm_one, perm_importance_callable
+
+f_full, f_lin, f_nl = shap_callables(orbit)
+
+Xtr_df, Xte_df = X_df[:-n_test], X_df[-n_test:]
+X_s = shap.sample(Xtr_df, 1000) 
+mask  = shap.maskers.Independent(X_s)
+
+expl_full = shap.Explainer(f_full, mask, feature_names=[f'x{i}' for i in range(X_df.shape[0])])
+expl_lin  = shap.Explainer(f_lin,  mask, feature_names=[f'x{i}' for i in range(X_df.shape[0])])
+expl_nl   = shap.Explainer(f_nl,   mask, feature_names=[f'x{i}' for i in range(X_df.shape[0])])
+
+s_full = expl_full(Xte_df)
+s_lin  = expl_lin(Xte_df)
+s_nl   = expl_nl(Xte_df)
+
+beeswarm_one(s_full, "Full model")
+beeswarm_one(s_lin,  "Linear head")
+beeswarm_one(s_nl,   "Nonlinear head")
+```
+
 ## Very high level theory
 
 The estimator can be seen as:
