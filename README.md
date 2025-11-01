@@ -25,7 +25,7 @@ ORBIt aims to provide:
 ## Quick start example
 
 ``` python
-from orbit.model.regression import ORBITRegressor, ORBITBaggedRegressor
+from astra_ai import ORBITBaggedRegressor
 from sklearn.datasets import make_friedman1
 from sklearn.metrics import mean_absolute_error, r2_score, PredictionErrorDisplay
 import numpy as np, matplotlib.pyplot as plt, shap
@@ -96,7 +96,7 @@ orbit.explain provides optional utilities to understand ORBIT’s predictions:
 
 ``` python
 import shap
-from model.explain import shap_callables, beeswarm_one, perm_importance_callable
+from astra_ai import shap_callables, beeswarm_one, perm_importance_callable
 
 f_full, f_lin, f_nl = shap_callables(orbit)
 
